@@ -2,7 +2,7 @@
   "api": 2,
   "id": "sh.abstract.delegation",
   "name": "Delegation",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A chat can ask another agent to work in its own chat and branch, then receive a short report when the sub-tasks finish.",
   "entry": "index.html",
   "background": "background.js",
