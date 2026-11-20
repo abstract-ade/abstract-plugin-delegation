@@ -1,7 +1,15 @@
 // The rules are pure functions so the host's plugin tests can exercise them.
 const Delegation = (() => {
-  const maxChildren = 5;
+  // Abstract's own limit when it doesn't say (a Mac from before ABS-214).
+  const defaultMaxChildren = 5;
   const maxDepth = 2;
+
+  // Settings › Agents › Sub-tasks per chat, as this Mac sends it.
+  function maxChildren(snapshot) {
+    const mac = ((snapshot && snapshot.macs) || []).find((item) => item.isThisMac);
+    const limit = mac && mac.subtasksPerChat;
+    return Number.isInteger(limit) && limit > 0 ? limit : defaultMaxChildren;
+  }
 
   function depth(chats, id) {
     const byId = new Map(chats.map((chat) => [chat.id, chat]));
@@ -18,12 +26,12 @@ const Delegation = (() => {
     return count;
   }
 
-  function check(state, chats, parentId, input) {
+  function check(state, chats, parentId, input, limit = defaultMaxChildren) {
     const parent = chats.find((chat) => chat.id === parentId);
     if (!parent) throw new Error("The parent chat isn't available.");
     if (depth(chats, parentId) >= maxDepth) throw new Error("Sub-tasks can be at most two chats deep.");
-    if (state.children.filter((child) => child.parentId === parentId).length >= maxChildren)
-      throw new Error("A chat can have at most five sub-tasks.");
+    if (state.children.filter((child) => child.parentId === parentId).length >= limit)
+      throw new Error(`A chat can have at most ${limit} ${limit === 1 ? "sub-task" : "sub-tasks"} (Settings › Agents).`);
     const title = String(input.title || "").trim();
     const prompt = String(input.prompt || "").trim();
     const agent = String(input.agent || "").trim();
@@ -84,7 +92,7 @@ const Delegation = (() => {
     return true;
   }
 
-  return { maxChildren, maxDepth, depth, check, waitedOn, ready, report, finish };
+  return { defaultMaxChildren, maxChildren, maxDepth, depth, check, waitedOn, ready, report, finish };
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = Delegation;
@@ -93,6 +101,7 @@ if (typeof window !== "undefined" && window.AbstractPlugin) {
   const host = window.AbstractPlugin;
   let state = { children: [], waits: {} };
   let chats = [];
+  let limit = Delegation.defaultMaxChildren;
   const loaded = host.send("storage.get", { key: "delegation" }).then((reply) => {
     if (reply && reply.value && Array.isArray(reply.value.children)) state = reply.value;
   });
@@ -116,7 +125,10 @@ if (typeof window !== "undefined" && window.AbstractPlugin) {
     }
   }
 
-  host.on("snapshot", (snapshot) => { chats = (snapshot && snapshot.chats) || []; });
+  host.on("snapshot", (snapshot) => {
+    chats = (snapshot && snapshot.chats) || [];
+    limit = Delegation.maxChildren(snapshot);
+  });
 
   host.tools.handle("delegate", (input, context) => enqueue(async () => {
     await host.send("getSnapshot");
@@ -124,7 +136,7 @@ if (typeof window !== "undefined" && window.AbstractPlugin) {
       child.title === String(input.title || "").trim() &&
       child.prompt === String(input.prompt || "").trim() && child.agent === String(input.agent || "").trim());
     if (existing) return `This sub-task is already in chat ${existing.id}. Call wait_for, then end your turn.`;
-    const request = Delegation.check(state, chats, context.chatId, input);
+    const request = Delegation.check(state, chats, context.chatId, input, limit);
     const reply = await host.send("createChat", {
       parentId: context.chatId, projectKey: request.projectKey, agentId: request.agent,
       title: request.title,
